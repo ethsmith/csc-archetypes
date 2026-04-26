@@ -1,0 +1,4 @@
+/home/admin/WebstormProjects/fragg-3.0-api/
+https://fragg-3-0-api.vercel.app/
+https://core.playcsc.com/graphql
+/home/admin/Documents/code/WebstormProjects/analytistats/
