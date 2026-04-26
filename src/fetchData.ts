@@ -543,13 +543,20 @@ export async function fetchPlayerStats(): Promise<GroupedPlayer[]> {
     // in match docs under whatever team they played for, but they aren't real
     // roster members and shouldn't pollute that team's section. The rule:
     //
-    //   * SIGNED / SIGNED_PROMOTED → use csc.team (active roster).
-    //   * EXPIRED → use the latest match's `team_name`, recovering the
-    //     franchise via `teamByName` when possible. (Off-season — they were
-    //     on a team last season but have no current contract.)
+    //   * SIGNED / SIGNED_PROMOTED / EXPIRED → use `csc.team`. CSC retains
+    //     the team association even after a contract expires (off-season),
+    //     so we trust CSC over the match docs. A sub who played for another
+    //     team once still has their real team listed in `csc.team`.
+    //   * SIGNED/SIGNED_PROMOTED/EXPIRED with no `csc.team` (rare data gap)
+    //     → fall back to the latest match's `team_name`, recovering the
+    //     franchise via `teamByName` when possible.
     //   * Anything else → null, i.e. Free Agents bucket.
     let resolvedTeam: GroupedPlayer['team'] = null;
-    if (cscPlayerType === 'SIGNED' || cscPlayerType === 'SIGNED_PROMOTED') {
+    const eligibleForTeam =
+      cscPlayerType === 'SIGNED' ||
+      cscPlayerType === 'SIGNED_PROMOTED' ||
+      cscPlayerType === 'EXPIRED';
+    if (eligibleForTeam) {
       if (csc?.team) {
         resolvedTeam = {
           name: csc.team.name,
@@ -558,18 +565,18 @@ export async function fetchPlayerStats(): Promise<GroupedPlayer[]> {
             prefix: csc.team.franchise.prefix,
           },
         };
+      } else if (cscPlayerType === 'EXPIRED' && lastTeam) {
+        const fromRoster = teamByName.get(lastTeam);
+        resolvedTeam = fromRoster
+          ? {
+              name: fromRoster.name,
+              franchise: {
+                name: fromRoster.franchise.name,
+                prefix: fromRoster.franchise.prefix,
+              },
+            }
+          : { name: lastTeam, franchise: { name: '', prefix: '' } };
       }
-    } else if (cscPlayerType === 'EXPIRED' && lastTeam) {
-      const fromRoster = teamByName.get(lastTeam);
-      resolvedTeam = fromRoster
-        ? {
-            name: fromRoster.name,
-            franchise: {
-              name: fromRoster.franchise.name,
-              prefix: fromRoster.franchise.prefix,
-            },
-          }
-        : { name: lastTeam, franchise: { name: '', prefix: '' } };
     }
 
     players.push({
