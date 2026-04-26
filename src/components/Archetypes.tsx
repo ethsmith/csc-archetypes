@@ -7,8 +7,10 @@ import {
   Search,
   X,
   EyeOff,
+  Eye,
   RotateCcw,
   HelpCircle,
+  ChevronLeft,
 } from 'lucide-react';
 import type { GroupedPlayer, PlayerStats, StatMode } from '../types';
 import {
@@ -56,6 +58,39 @@ function saveRevealed(set: Set<string>) {
     /* ignore quota / disabled storage */
   }
 }
+
+// ---------------------------------------------------------------------------
+// Pagination (unrevealed tab)
+// ---------------------------------------------------------------------------
+
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500, 1000] as const;
+type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_PAGE_SIZE: PageSize = 50;
+const PAGE_SIZE_KEY = 'csc-archetypes:unrevealedPageSize:v1';
+
+function loadPageSize(): PageSize {
+  if (typeof window === 'undefined') return DEFAULT_PAGE_SIZE;
+  try {
+    const raw = window.localStorage.getItem(PAGE_SIZE_KEY);
+    if (!raw) return DEFAULT_PAGE_SIZE;
+    const n = Number(raw);
+    if ((PAGE_SIZE_OPTIONS as readonly number[]).includes(n)) return n as PageSize;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_PAGE_SIZE;
+}
+
+function savePageSize(size: PageSize) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PAGE_SIZE_KEY, String(size));
+  } catch {
+    /* ignore */
+  }
+}
+
+type TabKey = 'unrevealed' | 'revealed';
 
 interface Props {
   players: GroupedPlayer[];
@@ -562,14 +597,45 @@ function UnrevealedCard({
   );
 }
 
+interface UnrevealedSectionProps {
+  players: UnrevealedEntry[];
+  totalCount: number;
+  pageSize: PageSize;
+  onPageSizeChange: (size: PageSize) => void;
+  page: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+  onSelect: (p: UnrevealedEntry) => void;
+}
+
 function UnrevealedSection({
   players,
+  totalCount,
+  pageSize,
+  onPageSizeChange,
+  page,
+  totalPages,
+  onPageChange,
   onSelect,
-}: {
-  players: UnrevealedEntry[];
-  onSelect: (p: UnrevealedEntry) => void;
-}) {
-  if (players.length === 0) return null;
+}: UnrevealedSectionProps) {
+  if (totalCount === 0) {
+    return (
+      <div className="glass rounded-2xl p-10 text-center border border-emerald-400/25">
+        <div className="mx-auto w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-400/20 to-neon-blue/20 border border-emerald-400/30 flex items-center justify-center mb-3">
+          <Eye size={22} className="text-emerald-400" />
+        </div>
+        <p className="text-slate-200 font-semibold">Every player in the current pool is revealed.</p>
+        <p className="text-slate-500 text-sm mt-2">
+          Switch to the Revealed tab to browse archetypes.
+        </p>
+      </div>
+    );
+  }
+
+  const start = page * pageSize;
+  const end = Math.min(totalCount, start + players.length);
+  const canPrev = page > 0;
+  const canNext = page < totalPages - 1;
 
   return (
     <section className="relative glass rounded-2xl p-5 sm:p-6 card-glow border border-neon-purple/30 overflow-hidden">
@@ -582,24 +648,208 @@ function UnrevealedSection({
           <h2 className="text-2xl font-extrabold gradient-text">Unrevealed Players</h2>
           <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl">
             Click any player to reveal their archetype. Revealed players are saved
-            locally and drop into the matching archetype section below.
+            locally and move to the Revealed tab.
           </p>
         </div>
         <div className="text-right flex-shrink-0">
           <div className="text-3xl sm:text-4xl font-extrabold text-neon-purple leading-none">
-            {players.length}
+            {totalCount}
           </div>
           <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-1">
             hidden
           </div>
         </div>
       </header>
-      <div className="relative grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+
+      <PaginationBar
+        page={page}
+        totalPages={totalPages}
+        pageSize={pageSize}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+        rangeStart={start + 1}
+        rangeEnd={end}
+        total={totalCount}
+        canPrev={canPrev}
+        canNext={canNext}
+      />
+
+      <div className="relative grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 mt-4">
         {players.map((p) => (
           <UnrevealedCard key={p.gp.steamId} entry={p} onClick={() => onSelect(p)} />
         ))}
       </div>
+
+      {totalPages > 1 && (
+        <div className="mt-5">
+          <PaginationBar
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            onPageChange={onPageChange}
+            onPageSizeChange={onPageSizeChange}
+            rangeStart={start + 1}
+            rangeEnd={end}
+            total={totalCount}
+            canPrev={canPrev}
+            canNext={canNext}
+            compact
+          />
+        </div>
+      )}
     </section>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Pagination bar shared between top and bottom of the unrevealed section.
+// -----------------------------------------------------------------------------
+
+interface PaginationBarProps {
+  page: number;
+  totalPages: number;
+  pageSize: PageSize;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: PageSize) => void;
+  rangeStart: number;
+  rangeEnd: number;
+  total: number;
+  canPrev: boolean;
+  canNext: boolean;
+  compact?: boolean;
+}
+
+function PaginationBar({
+  page,
+  totalPages,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+  rangeStart,
+  rangeEnd,
+  total,
+  canPrev,
+  canNext,
+  compact = false,
+}: PaginationBarProps) {
+  return (
+    <div className="relative flex flex-wrap items-center gap-3">
+      {!compact && (
+        <div className="flex items-center gap-2">
+          <label
+            htmlFor="unrevealed-page-size"
+            className="text-[10px] uppercase tracking-wider text-slate-500"
+          >
+            Per page
+          </label>
+          <select
+            id="unrevealed-page-size"
+            value={pageSize}
+            onChange={(e) => onPageSizeChange(Number(e.target.value) as PageSize)}
+            className="appearance-none glass rounded-lg px-3 py-1.5 pr-8 text-xs text-slate-200 border border-white/10 hover:border-neon-purple/30 focus:border-neon-purple/50 focus:outline-none cursor-pointer tabular-nums"
+          >
+            {PAGE_SIZE_OPTIONS.map((n) => (
+              <option key={n} value={n} className="bg-dark-800 text-slate-200">
+                {n}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div className="text-[11px] text-slate-400 tabular-nums">
+        Showing{' '}
+        <span className="text-slate-200 font-semibold">
+          {rangeStart}–{rangeEnd}
+        </span>{' '}
+        of <span className="text-slate-200 font-semibold">{total}</span>
+      </div>
+
+      <div className="flex items-center gap-2 ml-auto">
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.max(0, page - 1))}
+          disabled={!canPrev}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-slate-300 border border-white/10 hover:border-neon-purple/40 hover:text-neon-purple transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-slate-300 disabled:hover:border-white/10"
+          aria-label="Previous page"
+        >
+          <ChevronLeft size={14} />
+          Prev
+        </button>
+        <span className="text-[11px] text-slate-400 tabular-nums px-1">
+          Page <span className="text-slate-200 font-semibold">{page + 1}</span> /{' '}
+          <span className="text-slate-200 font-semibold">{totalPages}</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => onPageChange(Math.min(totalPages - 1, page + 1))}
+          disabled={!canNext}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-slate-300 border border-white/10 hover:border-neon-purple/40 hover:text-neon-purple transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-slate-300 disabled:hover:border-white/10"
+          aria-label="Next page"
+        >
+          Next
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Top-level tab switcher (Unrevealed / Revealed).
+// -----------------------------------------------------------------------------
+
+function TabSwitcher({
+  tab,
+  onChange,
+  unrevealedCount,
+  revealedCount,
+}: {
+  tab: TabKey;
+  onChange: (tab: TabKey) => void;
+  unrevealedCount: number;
+  revealedCount: number;
+}) {
+  const buttonClass = (active: boolean, activeColor: string) =>
+    `flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all cursor-pointer rounded-lg btn-glow ${
+      active
+        ? `${activeColor}`
+        : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+    }`;
+
+  return (
+    <div className="flex rounded-xl overflow-hidden glass neon-border p-1 gap-1">
+      <button
+        type="button"
+        onClick={() => onChange('unrevealed')}
+        className={buttonClass(
+          tab === 'unrevealed',
+          'bg-gradient-to-r from-neon-purple/25 to-neon-purple/15 text-neon-purple shadow-lg shadow-neon-purple/20',
+        )}
+        aria-pressed={tab === 'unrevealed'}
+      >
+        <EyeOff size={16} />
+        Unrevealed
+        <span className="ml-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold tabular-nums">
+          {unrevealedCount}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('revealed')}
+        className={buttonClass(
+          tab === 'revealed',
+          'bg-gradient-to-r from-neon-blue/25 to-neon-blue/15 text-neon-blue shadow-lg shadow-neon-blue/20',
+        )}
+        aria-pressed={tab === 'revealed'}
+      >
+        <Eye size={16} />
+        Revealed
+        <span className="ml-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold tabular-nums">
+          {revealedCount}
+        </span>
+      </button>
+    </div>
   );
 }
 
@@ -618,6 +868,17 @@ export default function Archetypes({ players }: Props) {
   // already-revealed players skip straight to the modal.
   const [revealPhase, setRevealPhase] = useState<'reveal' | 'modal'>('modal');
   const [revealed, setRevealed] = useState<Set<string>>(() => loadRevealed());
+
+  // Tab + pagination state (for the unrevealed tab).
+  const [activeTab, setActiveTab] = useState<TabKey>('unrevealed');
+  const [pageSize, setPageSizeState] = useState<PageSize>(() => loadPageSize());
+  const [page, setPage] = useState<number>(0);
+
+  const changePageSize = useCallback((size: PageSize) => {
+    setPageSizeState(size);
+    savePageSize(size);
+    setPage(0);
+  }, []);
 
   const markRevealed = useCallback((steamId: string) => {
     setRevealed((prev) => {
@@ -714,6 +975,19 @@ export default function Archetypes({ players }: Props) {
 
   const revealedInPoolCount = pool.length - unrevealed.length;
 
+  // Pagination is derived per render: `clampedPage` is always a valid page for
+  // the current `unrevealed` length, regardless of what's stored in `page`.
+  // When the list shrinks (e.g. after revealing the last card on a page) the
+  // stored `page` may temporarily exceed `totalPages - 1`, but we only ever
+  // display/slice with the clamped value, so that's harmless.
+  const totalPages = Math.max(1, Math.ceil(unrevealed.length / pageSize));
+  const clampedPage = Math.max(0, Math.min(page, totalPages - 1));
+
+  const unrevealedPage = useMemo<UnrevealedEntry[]>(() => {
+    const start = clampedPage * pageSize;
+    return unrevealed.slice(start, start + pageSize);
+  }, [unrevealed, clampedPage, pageSize]);
+
   // Search matches across the current pool.
   const searchMatches: SearchMatch[] = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -809,13 +1083,23 @@ export default function Archetypes({ players }: Props) {
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-3">
-          <ModeToggle mode={mode} onChange={(m) => { setTier('All'); setMode(m); }} />
+          <ModeToggle
+            mode={mode}
+            onChange={(m) => {
+              setTier('All');
+              setMode(m);
+              setPage(0);
+            }}
+          />
 
           <div className="flex items-center gap-2">
             <Filter size={14} className="text-slate-500" />
             <select
               value={tier}
-              onChange={(e) => setTier(e.target.value)}
+              onChange={(e) => {
+                setTier(e.target.value);
+                setPage(0);
+              }}
               className="appearance-none glass rounded-lg px-3 py-2 pr-8 text-sm text-slate-200 border border-white/10 hover:border-neon-blue/30 focus:border-neon-blue/50 focus:outline-none cursor-pointer min-w-[160px]"
             >
               {tiers.map((t) => (
@@ -832,7 +1116,10 @@ export default function Archetypes({ players }: Props) {
 
           <select
             value={minGames}
-            onChange={(e) => setMinGames(Number(e.target.value))}
+            onChange={(e) => {
+              setMinGames(Number(e.target.value));
+              setPage(0);
+            }}
             className="appearance-none glass rounded-lg px-3 py-2 pr-8 text-sm text-slate-200 border border-white/10 hover:border-neon-blue/30 focus:border-neon-blue/50 focus:outline-none cursor-pointer"
           >
             {MIN_GAMES_OPTIONS.map((n) => (
@@ -864,32 +1151,66 @@ export default function Archetypes({ players }: Props) {
         </div>
       </div>
 
-      {/* Unrevealed players */}
-      <UnrevealedSection players={unrevealed} onSelect={openUnrevealed} />
+      {/* Tab switcher */}
+      {pool.length > 0 && (
+        <TabSwitcher
+          tab={activeTab}
+          onChange={setActiveTab}
+          unrevealedCount={unrevealed.length}
+          revealedCount={revealedInPoolCount}
+        />
+      )}
 
-      {/* Archetype overview (jump-to chips) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-        {ARCHETYPES.map((arch) => (
-          <ArchetypeChip
-            key={arch.id}
-            arch={arch}
-            count={grouped.get(arch.id)?.length ?? 0}
-            onClick={() => jumpTo(arch.id)}
-          />
-        ))}
-      </div>
+      {/* Tab content */}
+      {pool.length > 0 && activeTab === 'unrevealed' && (
+        <UnrevealedSection
+          players={unrevealedPage}
+          totalCount={unrevealed.length}
+          pageSize={pageSize}
+          onPageSizeChange={changePageSize}
+          page={clampedPage}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          onSelect={openUnrevealed}
+        />
+      )}
 
-      {/* Per-archetype sections */}
-      <div className="space-y-5">
-        {ARCHETYPES.map((arch) => (
-          <ArchetypeSection
-            key={arch.id}
-            arch={arch}
-            players={grouped.get(arch.id) ?? []}
-            onSelect={(entry) => openCard(entry, arch)}
-          />
-        ))}
-      </div>
+      {pool.length > 0 && activeTab === 'revealed' && (
+        <>
+          {/* Archetype overview (jump-to chips) */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            {ARCHETYPES.map((arch) => (
+              <ArchetypeChip
+                key={arch.id}
+                arch={arch}
+                count={grouped.get(arch.id)?.length ?? 0}
+                onClick={() => jumpTo(arch.id)}
+              />
+            ))}
+          </div>
+
+          {/* Per-archetype sections */}
+          <div className="space-y-5">
+            {ARCHETYPES.map((arch) => (
+              <ArchetypeSection
+                key={arch.id}
+                arch={arch}
+                players={grouped.get(arch.id) ?? []}
+                onSelect={(entry) => openCard(entry, arch)}
+              />
+            ))}
+          </div>
+
+          {revealedInPoolCount === 0 && (
+            <div className="glass rounded-xl p-8 text-center border border-white/10">
+              <p className="text-slate-300">Nothing revealed yet.</p>
+              <p className="text-slate-500 text-sm mt-2">
+                Head back to the Unrevealed tab and click a player to reveal their archetype.
+              </p>
+            </div>
+          )}
+        </>
+      )}
 
       {pool.length === 0 && (
         <div className="glass rounded-xl p-8 text-center">
