@@ -26,6 +26,7 @@ import ModeToggle from './ModeToggle';
 import PlayerArchetypeModal from './PlayerArchetypeModal';
 import ArchetypeReveal from './ArchetypeReveal';
 import { statRanges, getStatColor } from '../statRanges';
+import { REVEAL_ALL_EVENT } from '../App';
 
 // ---------------------------------------------------------------------------
 // Reveal persistence (localStorage)
@@ -1215,6 +1216,33 @@ export default function Archetypes({ players }: Props) {
     saveRevealed(new Set());
   }, []);
 
+  // "Reveal all" button (in App.tsx header) dispatches a window event so it
+  // can affect this component's reveal state without prop-drilling. We resolve
+  // `pool` lazily through a ref so the same listener stays valid as filters
+  // change — dispatching always reveals whatever's currently in view.
+  const poolRef = useRef<{ gp: GroupedPlayer; stats: PlayerStats }[]>([]);
+  useEffect(() => {
+    function handler() {
+      const ids = poolRef.current.map(({ gp }) => gp.steamId);
+      if (ids.length === 0) return;
+      setRevealed((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        for (const id of ids) {
+          if (!next.has(id)) {
+            next.add(id);
+            changed = true;
+          }
+        }
+        if (!changed) return prev;
+        saveRevealed(next);
+        return next;
+      });
+    }
+    window.addEventListener(REVEAL_ALL_EVENT, handler);
+    return () => window.removeEventListener(REVEAL_ALL_EVENT, handler);
+  }, []);
+
   function openCard(entry: PlayerInGroup, arch: Archetype) {
     setSelected({ entry, arch });
     setRevealPhase(revealed.has(entry.gp.steamId) ? 'modal' : 'reveal');
@@ -1239,6 +1267,12 @@ export default function Archetypes({ players }: Props) {
     }
     return list;
   }, [players, mode, tier, minGames]);
+
+  // Keep `poolRef` in sync so the (mount-once) reveal-all listener can always
+  // read the latest filtered pool without re-binding.
+  useEffect(() => {
+    poolRef.current = pool;
+  }, [pool]);
 
   const tiers = useMemo(() => {
     const set = new Set<string>();

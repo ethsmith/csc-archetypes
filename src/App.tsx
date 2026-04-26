@@ -1,10 +1,19 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Sparkles, AlertTriangle } from 'lucide-react';
+import { Loader2, Sparkles, AlertTriangle, Eye } from 'lucide-react';
 import type { GroupedPlayer } from './types';
 import { fetchPlayerStats } from './fetchData';
 import Archetypes from './components/Archetypes';
 
 const SHIMMER_KEY = 'csc-archetypes:shimmer:v1';
+
+/**
+ * Custom event the Header dispatches when the user clicks "Reveal all". The
+ * `Archetypes` component listens for it and adds every player in the current
+ * (filtered) pool to the revealed set. We use an event instead of prop
+ * drilling because the reveal state lives inside `Archetypes` (it's also
+ * persisted to localStorage there).
+ */
+export const REVEAL_ALL_EVENT = 'csc-archetypes:reveal-all';
 
 function loadShimmerEnabled(): boolean {
   if (typeof window === 'undefined') return true;
@@ -13,6 +22,20 @@ function loadShimmerEnabled(): boolean {
   } catch {
     return true;
   }
+}
+
+function RevealAllButton() {
+  return (
+    <button
+      type="button"
+      onClick={() => window.dispatchEvent(new Event(REVEAL_ALL_EVENT))}
+      title="Reveal every player in the current pool"
+      className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer text-neon-blue border-neon-blue/40 bg-neon-blue/10 hover:bg-neon-blue/15"
+    >
+      <Eye size={14} />
+      <span className="hidden sm:inline uppercase tracking-wider">Reveal all</span>
+    </button>
+  );
 }
 
 function ShimmerToggle({
@@ -71,6 +94,7 @@ function Header() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <RevealAllButton />
           <ShimmerToggle enabled={shimmerEnabled} onChange={setShimmerEnabled} />
         </div>
       </div>
