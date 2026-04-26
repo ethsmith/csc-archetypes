@@ -6,10 +6,15 @@ import { fetchAllPlayers, type CscPlayer } from './fetchFranchises';
  *
  * One document per (match_id, steam_id) — see /home/admin/WebstormProjects/fragg-3.0-api/.
  * The parser at /home/admin/Documents/code/GolandProjects/ecorating/ ingests demos and
- * POSTs each match's player rows to the API. This client paginates through every
- * doc and aggregates them per-player (summing counters, weighting rates by
- * rounds_played) so the existing archetype/UI layer keeps the same per-player
- * `PlayerStats` shape it had when it was reading the legacy spreadsheet.
+ * POSTs each match's player rows to the API.
+ *
+ * The API exposes a server-side aggregation endpoint at
+ * `GET /player-stats/aggregated` that returns one record per player with all
+ * counters summed and rate fields weighted-averaged by `rounds_played`. We
+ * use it directly so the client only deals with ~1 record per player instead
+ * of the underlying ~7 docs per player. (Previously we paginated raw docs
+ * and aggregated in-browser; that scaled to multiple minutes of load time as
+ * the season grew.)
  *
  * Currently the API only stores regulation matches; combine and scrim aren't
  * separated yet, so every aggregate goes into the `regulation` bucket and
@@ -17,13 +22,13 @@ import { fetchAllPlayers, type CscPlayer } from './fetchFranchises';
  */
 
 const STATS_API_BASE = 'https://fragg-3-0-api.vercel.app';
-const PAGE_LIMIT = 500; // server caps ?limit at 500
 
-type ApiDoc = Record<string, unknown> & {
-  match_id?: string;
+/** Aggregated record returned by `/player-stats/aggregated` (snake_case). */
+type AggregatedDoc = Record<string, unknown> & {
   steam_id?: string;
   name?: string;
   team_name?: string;
+  games?: number;
   rounds_played?: number;
   multi_kills?: {
     '1k'?: number;
@@ -34,12 +39,9 @@ type ApiDoc = Record<string, unknown> & {
   };
 };
 
-interface ApiResponse {
-  total: number;
+interface AggregatedResponse {
   count: number;
-  skip: number;
-  limit: number;
-  results: ApiDoc[];
+  results: AggregatedDoc[];
 }
 
 // ---------------------------------------------------------------------------
@@ -240,27 +242,14 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-async function fetchAllStatsDocs(): Promise<ApiDoc[]> {
-  const docs: ApiDoc[] = [];
-  let skip = 0;
-
-  // Pull pages until we've drained `total`. The first page tells us how many
-  // documents exist; subsequent pages just keep offsetting until we've got them.
-  for (;;) {
-    const url = `${STATS_API_BASE}/player-stats?limit=${PAGE_LIMIT}&skip=${skip}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`stats API ${url} returned ${res.status}`);
-    }
-    const page = (await res.json()) as ApiResponse;
-
-    docs.push(...page.results);
-
-    skip += page.results.length;
-    if (page.results.length === 0 || skip >= page.total) break;
+async function fetchAggregatedDocs(): Promise<AggregatedDoc[]> {
+  const url = `${STATS_API_BASE}/player-stats/aggregated`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`stats API ${url} returned ${res.status}`);
   }
-
-  return docs;
+  const json = (await res.json()) as AggregatedResponse;
+  return json.results;
 }
 
 /** Returns a zero-initialised PlayerStats; aggregator overwrites fields it knows about. */
@@ -468,46 +457,32 @@ function emptyStats(): PlayerStats {
 }
 
 /**
- * Aggregates a player's per-match docs into one PlayerStats row matching the
- * shape the rest of the app expects.
+ * Maps a server-aggregated doc (snake_case, already summed/averaged) onto the
+ * camelCase `PlayerStats` shape the rest of the app expects. Sums and rate
+ * weighting were performed by the API's `$group` pipeline.
  */
-function aggregate(steamId: string, docs: ApiDoc[]): PlayerStats {
+function mapAggregated(doc: AggregatedDoc): PlayerStats {
   const out = emptyStats();
-  out.steamId = steamId;
-  out.games = docs.length;
+  out.steamId = (doc.steam_id as string) ?? '';
+  out.name = (doc.name as string) ?? '';
+  out.games = num(doc.games);
 
-  // Player name: pick the most recent doc's name (docs come back insertion-ordered).
-  const lastNamed = [...docs].reverse().find((d) => typeof d.name === 'string' && d.name);
-  out.name = (lastNamed?.name as string) ?? '';
-
-  const totalRounds = docs.reduce((s, d) => s + num(d.rounds_played), 0);
-
-  // Sum fields.
+  // Sum fields — already summed server-side, just rename the key.
   for (const [snake, camel] of Object.entries(SUM_FIELDS)) {
-    let sum = 0;
-    for (const d of docs) sum += num(d[snake]);
-    (out as unknown as Record<string, number>)[camel as string] = sum;
+    (out as unknown as Record<string, number>)[camel as string] = num(doc[snake]);
   }
 
   // multi_kills sub-doc → top-level oneK..fiveK counters.
-  for (const d of docs) {
-    const mk = d.multi_kills ?? {};
-    out.oneK += num(mk['1k']);
-    out.twoK += num(mk['2k']);
-    out.threeK += num(mk['3k']);
-    out.fourK += num(mk['4k']);
-    out.fiveK += num(mk['5k']);
-  }
+  const mk = doc.multi_kills ?? {};
+  out.oneK = num(mk['1k']);
+  out.twoK = num(mk['2k']);
+  out.threeK = num(mk['3k']);
+  out.fourK = num(mk['4k']);
+  out.fiveK = num(mk['5k']);
 
-  // Rate fields — weighted average by rounds_played per match.
-  if (totalRounds > 0) {
-    for (const [snake, camel] of Object.entries(RATE_FIELDS)) {
-      let weighted = 0;
-      for (const d of docs) {
-        weighted += num(d[snake]) * num(d.rounds_played);
-      }
-      (out as unknown as Record<string, number>)[camel as string] = weighted / totalRounds;
-    }
+  // Rate fields — already weighted-averaged server-side.
+  for (const [snake, camel] of Object.entries(RATE_FIELDS)) {
+    (out as unknown as Record<string, number>)[camel as string] = num(doc[snake]);
   }
 
   return out;
@@ -518,8 +493,8 @@ function aggregate(steamId: string, docs: ApiDoc[]): PlayerStats {
 // ---------------------------------------------------------------------------
 
 export async function fetchPlayerStats(): Promise<GroupedPlayer[]> {
-  const [docs, cscPlayers] = await Promise.all([
-    fetchAllStatsDocs(),
+  const [aggregated, cscPlayers] = await Promise.all([
+    fetchAggregatedDocs(),
     fetchAllPlayers().catch(() => [] as CscPlayer[]),
   ]);
 
@@ -528,26 +503,25 @@ export async function fetchPlayerStats(): Promise<GroupedPlayer[]> {
   // populated in CSC core still pick up a tier.
   const cscBySteam = new Map<string, CscPlayer>();
   const cscByName = new Map<string, CscPlayer>();
+  // teamByName lets us recover franchise info for players whose contracts
+  // have expired (CSC returns `team: null` for them) but who appeared in match
+  // docs under a known team_name. We seed it from currently-rostered players,
+  // who carry both the team name and franchise metadata.
+  const teamByName = new Map<string, NonNullable<CscPlayer['team']>>();
   for (const p of cscPlayers) {
     if (p.steam64Id) cscBySteam.set(p.steam64Id, p);
     if (p.name) cscByName.set(p.name.toLowerCase(), p);
-  }
-
-  // Group docs by steam_id.
-  const grouped = new Map<string, ApiDoc[]>();
-  for (const d of docs) {
-    if (!d.steam_id) continue;
-    let list = grouped.get(d.steam_id);
-    if (!list) {
-      list = [];
-      grouped.set(d.steam_id, list);
+    if (p.team && !teamByName.has(p.team.name)) {
+      teamByName.set(p.team.name, p.team);
     }
-    list.push(d);
   }
 
   const players: GroupedPlayer[] = [];
-  for (const [steamId, playerDocs] of grouped) {
-    const stats = aggregate(steamId, playerDocs);
+  for (const doc of aggregated) {
+    const steamId = (doc.steam_id as string) ?? '';
+    if (!steamId) continue;
+
+    const stats = mapAggregated(doc);
 
     const csc =
       cscBySteam.get(steamId) ??
@@ -556,18 +530,54 @@ export async function fetchPlayerStats(): Promise<GroupedPlayer[]> {
     const cscTier = csc?.tier?.name ?? null;
     const cscPlayerType = csc?.type ?? null;
 
-    // The legacy `stats.tier` field was a string label shown next to the
-    // player's name. Use the CSC tier when available; otherwise fall back to
-    // the team_name from the most recent match so the badge still says
-    // something useful.
-    const lastTeam = [...playerDocs].reverse().find((d) => d.team_name)?.team_name ?? '';
+    // `stats.tier` is the string label rendered next to a player's name. Use
+    // the CSC tier when available; otherwise fall back to the team_name from
+    // the most recent match (the API's $group already picked the latest).
+    const lastTeam = (doc.team_name as string) ?? '';
     stats.tier = cscTier ?? lastTeam;
+
+    // Resolve the player's team for the Teams view.
+    //
+    // Only players who are actually rostered should land under a team header.
+    // Subs, draft-eligible, free agents, perma-FAs, GM/AGM, etc. all show up
+    // in match docs under whatever team they played for, but they aren't real
+    // roster members and shouldn't pollute that team's section. The rule:
+    //
+    //   * SIGNED / SIGNED_PROMOTED → use csc.team (active roster).
+    //   * EXPIRED → use the latest match's `team_name`, recovering the
+    //     franchise via `teamByName` when possible. (Off-season — they were
+    //     on a team last season but have no current contract.)
+    //   * Anything else → null, i.e. Free Agents bucket.
+    let resolvedTeam: GroupedPlayer['team'] = null;
+    if (cscPlayerType === 'SIGNED' || cscPlayerType === 'SIGNED_PROMOTED') {
+      if (csc?.team) {
+        resolvedTeam = {
+          name: csc.team.name,
+          franchise: {
+            name: csc.team.franchise.name,
+            prefix: csc.team.franchise.prefix,
+          },
+        };
+      }
+    } else if (cscPlayerType === 'EXPIRED' && lastTeam) {
+      const fromRoster = teamByName.get(lastTeam);
+      resolvedTeam = fromRoster
+        ? {
+            name: fromRoster.name,
+            franchise: {
+              name: fromRoster.franchise.name,
+              prefix: fromRoster.franchise.prefix,
+            },
+          }
+        : { name: lastTeam, franchise: { name: '', prefix: '' } };
+    }
 
     players.push({
       steamId,
       name: stats.name,
       cscTier,
       cscPlayerType,
+      team: resolvedTeam,
       regulation: [{ stats, tier: stats.tier }],
       scrim: [], // API does not currently distinguish scrim/combine matches.
     });

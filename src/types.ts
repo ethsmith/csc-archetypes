@@ -5,11 +5,20 @@ export interface StatEntry {
   tier: string;
 }
 
+export interface GroupedPlayerTeam {
+  name: string;
+  franchise: {
+    name: string;
+    prefix: string;
+  };
+}
+
 export interface GroupedPlayer {
   steamId: string;
   name: string;
   cscTier: string | null;
   cscPlayerType: string | null;
+  team: GroupedPlayerTeam | null;
   regulation: StatEntry[];
   scrim: StatEntry[];
 }

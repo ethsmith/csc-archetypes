@@ -11,14 +11,16 @@ import {
   RotateCcw,
   HelpCircle,
   ChevronLeft,
+  Shield,
 } from 'lucide-react';
-import type { GroupedPlayer, PlayerStats, StatMode } from '../types';
+import type { GroupedPlayer, GroupedPlayerTeam, PlayerStats, StatMode } from '../types';
 import {
   ARCHETYPES,
   ARCHETYPE_BY_ID,
   assignArchetypes,
   computeSkillRatings,
   type Archetype,
+  type SkillRating,
 } from '../archetypes';
 import ModeToggle from './ModeToggle';
 import PlayerArchetypeModal from './PlayerArchetypeModal';
@@ -90,7 +92,7 @@ function savePageSize(size: PageSize) {
   }
 }
 
-type TabKey = 'unrevealed' | 'revealed';
+type TabKey = 'unrevealed' | 'revealed' | 'teams';
 
 interface Props {
   players: GroupedPlayer[];
@@ -804,11 +806,13 @@ function TabSwitcher({
   onChange,
   unrevealedCount,
   revealedCount,
+  teamCount,
 }: {
   tab: TabKey;
   onChange: (tab: TabKey) => void;
   unrevealedCount: number;
   revealedCount: number;
+  teamCount: number;
 }) {
   const buttonClass = (active: boolean, activeColor: string) =>
     `flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all cursor-pointer rounded-lg btn-glow ${
@@ -818,7 +822,7 @@ function TabSwitcher({
     }`;
 
   return (
-    <div className="flex rounded-xl overflow-hidden glass neon-border p-1 gap-1">
+    <div className="flex rounded-xl overflow-hidden glass neon-border p-1 gap-1 flex-wrap">
       <button
         type="button"
         onClick={() => onChange('unrevealed')}
@@ -849,6 +853,322 @@ function TabSwitcher({
           {revealedCount}
         </span>
       </button>
+      <button
+        type="button"
+        onClick={() => onChange('teams')}
+        className={buttonClass(
+          tab === 'teams',
+          'bg-gradient-to-r from-emerald-400/25 to-emerald-400/15 text-emerald-300 shadow-lg shadow-emerald-400/20',
+        )}
+        aria-pressed={tab === 'teams'}
+      >
+        <Shield size={16} />
+        Teams
+        <span className="ml-1 px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-bold tabular-nums">
+          {teamCount}
+        </span>
+      </button>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Teams view — groups players by their CSC roster team. Archetype, skill, and
+// fit scores are hidden until each player is revealed (same flow as the
+// Unrevealed tab); clicking any row triggers the reveal animation → modal.
+// -----------------------------------------------------------------------------
+
+const FREE_AGENTS_KEY = '__free_agents__';
+
+interface TeamMember {
+  gp: GroupedPlayer;
+  stats: PlayerStats;
+}
+
+interface TeamGroup {
+  key: string;
+  team: GroupedPlayerTeam | null;
+  displayName: string;
+  franchiseName: string | null;
+  members: TeamMember[];
+}
+
+function buildTeamGroups(pool: { gp: GroupedPlayer; stats: PlayerStats }[]): TeamGroup[] {
+  const map = new Map<string, TeamGroup>();
+  for (const { gp, stats } of pool) {
+    const key = gp.team
+      ? `${gp.team.franchise.prefix}|${gp.team.name}`
+      : FREE_AGENTS_KEY;
+    let group = map.get(key);
+    if (!group) {
+      group = {
+        key,
+        team: gp.team,
+        displayName: gp.team
+          ? gp.team.franchise.prefix
+            ? `${gp.team.franchise.prefix} ${gp.team.name}`
+            : gp.team.name
+          : 'Free Agents',
+        franchiseName: gp.team?.franchise.name ?? null,
+        members: [],
+      };
+      map.set(key, group);
+    }
+    group.members.push({ gp, stats });
+  }
+
+  // Alphabetical so player order doesn't leak any archetype/skill ordering for
+  // hidden players.
+  for (const g of map.values()) {
+    g.members.sort((a, b) => a.gp.name.localeCompare(b.gp.name));
+  }
+
+  return [...map.values()].sort((a, b) => {
+    // Free agents always sink to the bottom of the list.
+    if (a.key === FREE_AGENTS_KEY && b.key !== FREE_AGENTS_KEY) return 1;
+    if (b.key === FREE_AGENTS_KEY && a.key !== FREE_AGENTS_KEY) return -1;
+    return a.displayName.localeCompare(b.displayName);
+  });
+}
+
+interface TeamPlayerRowProps {
+  member: TeamMember;
+  arch: Archetype | null;
+  fitScore: number | null;
+  skillScore: number | null;
+  onClick: () => void;
+}
+
+function TeamPlayerRow({ member, arch, fitScore, skillScore, onClick }: TeamPlayerRowProps) {
+  const isRevealed = arch !== null && fitScore !== null;
+  const Icon = arch?.icon ?? HelpCircle;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer text-left w-full ${
+        isRevealed
+          ? `${arch.borderClass} hover:bg-white/5`
+          : 'border-neon-purple/20 hover:border-neon-purple/40 bg-gradient-to-r from-neon-purple/[0.04] to-transparent'
+      }`}
+      aria-label={isRevealed ? `Open ${member.gp.name}` : `Reveal archetype for ${member.gp.name}`}
+    >
+      <div
+        className={`p-2 rounded-lg flex-shrink-0 transition-transform group-hover:scale-105 ${
+          isRevealed
+            ? `bg-gradient-to-br ${arch.gradientClass} border ${arch.borderClass}`
+            : 'bg-neon-purple/15 border border-neon-purple/30'
+        }`}
+      >
+        <Icon size={18} className={isRevealed ? arch.textClass : 'text-neon-purple'} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-bold text-slate-100 truncate group-hover:text-neon-blue transition-colors">
+          {member.gp.name}
+        </div>
+        <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+          {isRevealed ? (
+            <span className={`font-medium ${arch.textClass} truncate`}>{arch.name}</span>
+          ) : (
+            <span className="text-neon-purple font-medium uppercase tracking-wider text-[10px]">
+              Hidden · click to reveal
+            </span>
+          )}
+          {member.gp.cscTier && (
+            <>
+              <span className="text-slate-600">·</span>
+              <span className="uppercase text-[10px] tracking-wider text-slate-500">
+                {member.gp.cscTier}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="text-right tabular-nums w-12 sm:w-14 hidden sm:block">
+        <div
+          className={`text-lg font-extrabold leading-none ${
+            isRevealed && skillScore !== null ? scoreColor(skillScore) : 'text-slate-600'
+          }`}
+        >
+          {isRevealed && skillScore !== null ? Math.round(skillScore) : '?'}
+        </div>
+        <div className="text-[9px] uppercase tracking-wider text-slate-500 mt-0.5">skill</div>
+      </div>
+      <div className="text-right tabular-nums w-12 sm:w-14">
+        <div
+          className={`text-lg font-extrabold leading-none ${
+            isRevealed && fitScore !== null ? scoreColor(fitScore) : 'text-slate-600'
+          }`}
+        >
+          {isRevealed && fitScore !== null ? Math.round(fitScore) : '?'}
+        </div>
+        <div className="text-[9px] uppercase tracking-wider text-slate-500 mt-0.5">fit</div>
+      </div>
+      <ChevronRight
+        size={14}
+        className="text-slate-500 flex-shrink-0 group-hover:text-neon-blue transition-colors"
+      />
+    </button>
+  );
+}
+
+function TeamAvgStat({ label, value }: { label: string; value: number | null }) {
+  const hasValue = value !== null;
+  return (
+    <div className="text-right">
+      <div
+        className={`text-xl font-extrabold leading-none tabular-nums ${
+          hasValue ? scoreColor(value) : 'text-slate-600'
+        }`}
+      >
+        {hasValue ? Math.round(value) : '—'}
+      </div>
+      <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-0.5 whitespace-nowrap">
+        {label}
+      </div>
+    </div>
+  );
+}
+
+interface TeamSectionProps {
+  group: TeamGroup;
+  assignments: ReturnType<typeof assignArchetypes>;
+  skillRatings: Map<string, SkillRating>;
+  revealed: Set<string>;
+  onSelect: (member: TeamMember) => void;
+}
+
+function TeamSection({ group, assignments, skillRatings, revealed, onSelect }: TeamSectionProps) {
+  const total = group.members.length;
+  const isFreeAgents = group.key === FREE_AGENTS_KEY;
+
+  // Single pass over the roster: count revealed members and accumulate sums
+  // for the per-team averages. Averages are taken over revealed players only —
+  // unrevealed players have unknown scores, and including a zero/null would
+  // make the average meaningless.
+  let revealedCount = 0;
+  let skillSum = 0;
+  let skillCount = 0;
+  let fitSum = 0;
+  let fitCount = 0;
+  for (const m of group.members) {
+    if (!revealed.has(m.gp.steamId)) continue;
+    revealedCount++;
+    const a = assignments.get(m.gp.steamId);
+    if (a) {
+      fitSum += a.primary.score;
+      fitCount++;
+    }
+    const sr = skillRatings.get(m.gp.steamId);
+    if (sr) {
+      skillSum += sr.skillRating;
+      skillCount++;
+    }
+  }
+  const avgSkill = skillCount > 0 ? skillSum / skillCount : null;
+  const avgFit = fitCount > 0 ? fitSum / fitCount : null;
+
+  return (
+    <section className="glass rounded-2xl p-5 sm:p-6 card-glow border border-white/10">
+      <header className="flex items-start gap-4 mb-4 flex-wrap">
+        <div
+          className={`p-3 rounded-xl border flex-shrink-0 ${
+            isFreeAgents
+              ? 'bg-gradient-to-br from-slate-500/15 to-slate-700/15 border-white/15'
+              : 'bg-gradient-to-br from-emerald-400/15 to-neon-blue/15 border-emerald-400/30'
+          }`}
+        >
+          <Shield size={24} className={isFreeAgents ? 'text-slate-400' : 'text-emerald-300'} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-xl font-extrabold text-slate-100 truncate">{group.displayName}</h2>
+          {group.franchiseName && (
+            <div className="text-xs text-slate-400 truncate">{group.franchiseName}</div>
+          )}
+        </div>
+        <div className="flex items-start gap-3 flex-shrink-0">
+          <TeamAvgStat label="avg skill" value={avgSkill} />
+          <TeamAvgStat label="avg fit" value={avgFit} />
+          <div className="text-right">
+            <div className="text-2xl font-extrabold text-slate-100 leading-none tabular-nums">
+              {total}
+            </div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-0.5">
+              player{total === 1 ? '' : 's'}
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1 tabular-nums">
+              {revealedCount} / {total} revealed
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {group.members.map((member) => {
+          const isRevealed = revealed.has(member.gp.steamId);
+          let arch: Archetype | null = null;
+          let fitScore: number | null = null;
+          let skillScore: number | null = null;
+          if (isRevealed) {
+            const a = assignments.get(member.gp.steamId);
+            if (a) {
+              arch = ARCHETYPE_BY_ID.get(a.primary.archetypeId) ?? null;
+              fitScore = a.primary.score;
+            }
+            const skill = skillRatings.get(member.gp.steamId);
+            if (skill) skillScore = skill.skillRating;
+          }
+          return (
+            <TeamPlayerRow
+              key={member.gp.steamId}
+              member={member}
+              arch={arch}
+              fitScore={fitScore}
+              skillScore={skillScore}
+              onClick={() => onSelect(member)}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TeamsView({
+  groups,
+  assignments,
+  skillRatings,
+  revealed,
+  onSelect,
+}: {
+  groups: TeamGroup[];
+  assignments: ReturnType<typeof assignArchetypes>;
+  skillRatings: Map<string, SkillRating>;
+  revealed: Set<string>;
+  onSelect: (member: TeamMember) => void;
+}) {
+  if (groups.length === 0) {
+    return (
+      <div className="glass rounded-xl p-8 text-center border border-white/10">
+        <p className="text-slate-300">No teams in the current pool.</p>
+        <p className="text-slate-500 text-sm mt-2">
+          Try lowering the minimum games or selecting a different tier.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      {groups.map((g) => (
+        <TeamSection
+          key={g.key}
+          group={g}
+          assignments={assignments}
+          skillRatings={skillRatings}
+          revealed={revealed}
+          onSelect={onSelect}
+        />
+      ))}
     </div>
   );
 }
@@ -987,6 +1307,9 @@ export default function Archetypes({ players }: Props) {
     const start = clampedPage * pageSize;
     return unrevealed.slice(start, start + pageSize);
   }, [unrevealed, clampedPage, pageSize]);
+
+  // Teams tab data: group every pool player by their CSC roster team.
+  const teamGroups = useMemo<TeamGroup[]>(() => buildTeamGroups(pool), [pool]);
 
   // Search matches across the current pool.
   const searchMatches: SearchMatch[] = useMemo(() => {
@@ -1158,6 +1481,7 @@ export default function Archetypes({ players }: Props) {
           onChange={setActiveTab}
           unrevealedCount={unrevealed.length}
           revealedCount={revealedInPoolCount}
+          teamCount={teamGroups.length}
         />
       )}
 
@@ -1172,6 +1496,16 @@ export default function Archetypes({ players }: Props) {
           totalPages={totalPages}
           onPageChange={setPage}
           onSelect={openUnrevealed}
+        />
+      )}
+
+      {pool.length > 0 && activeTab === 'teams' && (
+        <TeamsView
+          groups={teamGroups}
+          assignments={assignments}
+          skillRatings={skillRatings}
+          revealed={revealed}
+          onSelect={(member) => openUnrevealed({ gp: member.gp, stats: member.stats })}
         />
       )}
 
