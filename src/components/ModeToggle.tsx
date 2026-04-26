@@ -1,12 +1,19 @@
 import { Swords, Gamepad2 } from 'lucide-react';
 import type { StatMode } from '../types';
 
+// Scrim stats aren't being collected right now, so the scrim tab — and the
+// whole mode toggle, since regulation would be the only option — is hidden
+// for now. Flip this flag back to `true` once scrim data is flowing again.
+const SHOW_SCRIM_TAB = false;
+
 interface Props {
   mode: StatMode;
   onChange: (mode: StatMode) => void;
 }
 
 export default function ModeToggle({ mode, onChange }: Props) {
+  if (!SHOW_SCRIM_TAB) return null;
+
   return (
     <div className="flex rounded-xl overflow-hidden glass neon-border p-1 gap-1">
       <button
