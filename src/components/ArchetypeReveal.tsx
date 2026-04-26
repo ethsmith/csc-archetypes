@@ -9,7 +9,7 @@ interface Props {
 }
 
 /**
- * Card-pack-style player reveal.
+ * Cinematic player archetype reveal.
  *
  * Plays a ~3 s archetype-themed sequence before the modal opens:
  *  1. Backdrop fades in over the page.

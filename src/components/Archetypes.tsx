@@ -6,7 +6,7 @@ import {
   Filter,
   Search,
   X,
-  Package,
+  EyeOff,
   RotateCcw,
   HelpCircle,
 } from 'lucide-react';
@@ -26,7 +26,7 @@ import { statRanges, getStatColor } from '../statRanges';
 // ---------------------------------------------------------------------------
 // Reveal persistence (localStorage)
 //
-// We hide every player's archetype until the user opens their pack for the
+// Each player's archetype stays hidden until the user reveals them for the
 // first time. The set of revealed steamIds is persisted between sessions so
 // users don't have to re-reveal players they've already seen.
 // ---------------------------------------------------------------------------
@@ -456,7 +456,7 @@ function PlayerSearch({
                               </span>
                             ) : (
                               <span className="text-neon-purple font-medium uppercase tracking-wider text-[10px]">
-                                Sealed · click to reveal
+                                Hidden · click to reveal
                               </span>
                             )}
                             <span>·</span>
@@ -507,8 +507,8 @@ function PlayerSearch({
 }
 
 // -----------------------------------------------------------------------------
-// Unrevealed players section — "sealed packs" the user can pop to reveal
-// each player's archetype.
+// Unrevealed players section — each entry is a hidden player the user can
+// click to reveal their archetype.
 // -----------------------------------------------------------------------------
 
 interface UnrevealedEntry {
@@ -529,7 +529,7 @@ function UnrevealedCard({
       type="button"
       onClick={onClick}
       className="unrevealed-card group relative rounded-xl p-3 text-center cursor-pointer overflow-hidden border border-neon-purple/25 hover:border-neon-purple/60"
-      aria-label={`Reveal ${gp.name}`}
+      aria-label={`Reveal archetype for ${gp.name}`}
     >
       <div className="absolute inset-0 bg-gradient-to-br from-dark-700/80 to-dark-800/85" />
       <div className="absolute inset-0 unrevealed-shimmer" />
@@ -576,13 +576,13 @@ function UnrevealedSection({
       <div className="absolute inset-0 bg-gradient-to-br from-neon-purple/8 via-transparent to-neon-blue/8 pointer-events-none" />
       <header className="relative flex items-center gap-4 mb-5">
         <div className="p-3 rounded-xl bg-gradient-to-br from-neon-purple/25 to-neon-blue/25 border border-neon-purple/30 flex-shrink-0">
-          <Package size={28} className="text-neon-purple" />
+          <EyeOff size={28} className="text-neon-purple" />
         </div>
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-extrabold gradient-text">Unrevealed Players</h2>
           <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl">
-            Pop a pack to discover each player's archetype. Revealed players are saved
-            locally and slot themselves into the archetype below.
+            Click any player to reveal their archetype. Revealed players are saved
+            locally and drop into the matching archetype section below.
           </p>
         </div>
         <div className="text-right flex-shrink-0">
@@ -590,7 +590,7 @@ function UnrevealedSection({
             {players.length}
           </div>
           <div className="text-[10px] uppercase tracking-wider text-slate-500 mt-1">
-            sealed
+            hidden
           </div>
         </div>
       </header>
@@ -613,8 +613,8 @@ export default function Archetypes({ players }: Props) {
   const [minGames, setMinGames] = useState<number>(3);
   const [search, setSearch] = useState<string>('');
   const [selected, setSelected] = useState<{ entry: PlayerInGroup; arch: Archetype } | null>(null);
-  // Two-phase open: 'reveal' shows the themed card-pack animation, 'modal'
-  // shows the full archetype breakdown. First-time clicks go reveal → modal;
+  // Two-phase open: 'reveal' plays the themed reveal animation, 'modal' shows
+  // the full archetype breakdown. First-time clicks go reveal → modal;
   // already-revealed players skip straight to the modal.
   const [revealPhase, setRevealPhase] = useState<'reveal' | 'modal'>('modal');
   const [revealed, setRevealed] = useState<Set<string>>(() => loadRevealed());
@@ -681,8 +681,8 @@ export default function Archetypes({ players }: Props) {
     const groups = new Map<string, PlayerInGroup[]>();
     for (const arch of ARCHETYPES) groups.set(arch.id, []);
     for (const { gp, stats } of pool) {
-      // Players are only sorted into an archetype section once their pack
-      // has been opened — keeps the page suspenseful on first visit.
+      // Players are only sorted into an archetype section once they've been
+      // revealed — keeps the page suspenseful on first visit.
       if (!revealed.has(gp.steamId)) continue;
       const a = assignments.get(gp.steamId);
       if (!a) continue;
@@ -847,7 +847,7 @@ export default function Archetypes({ players }: Props) {
               type="button"
               onClick={resetRevealed}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-neon-purple border border-white/10 hover:border-neon-purple/40 transition-colors cursor-pointer"
-              title="Reseal every pack so you can reveal them again"
+              title="Hide every archetype again so you can reveal them from scratch"
             >
               <RotateCcw size={13} />
               Reset reveals
@@ -864,7 +864,7 @@ export default function Archetypes({ players }: Props) {
         </div>
       </div>
 
-      {/* Unrevealed players (sealed packs) */}
+      {/* Unrevealed players */}
       <UnrevealedSection players={unrevealed} onSelect={openUnrevealed} />
 
       {/* Archetype overview (jump-to chips) */}

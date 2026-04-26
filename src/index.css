@@ -85,7 +85,8 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   Unrevealed (sealed-pack) cards
+   Unrevealed-player tiles (shown until the user reveals each player's
+   archetype). Generic UI cards — not trading cards.
    --------------------------------------------------------------------------- */
 
 .unrevealed-card {
@@ -177,8 +178,8 @@ body {
 /* ===========================================================================
    Archetype reveal animations
    ===========================================================================
-   Card-pack-style reveal: backdrop dims, the archetype's themed effect plays
-   for ~1.8 s, the icon punches in, name + fit score slide up, then the modal
+   Cinematic reveal: backdrop dims, the archetype's themed effect plays for
+   ~1.8 s, the icon punches in, name + fit score slide up, then the modal
    takes over. The per-archetype `.deco-*` classes drive the themed effect.
    =========================================================================== */
 
