@@ -133,6 +133,12 @@ body {
   pointer-events: none;
 }
 
+/* Header toggle adds `shimmer-disabled` to <html> to pause the animation. */
+.shimmer-disabled .unrevealed-shimmer {
+  animation: none;
+  opacity: 0;
+}
+
 .animate-in {
   animation: fadeSlideIn 0.4s ease-out;
 }

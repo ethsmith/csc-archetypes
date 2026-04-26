@@ -4,10 +4,61 @@ import type { GroupedPlayer } from './types';
 import { fetchPlayerStats } from './fetchData';
 import Archetypes from './components/Archetypes';
 
+const SHIMMER_KEY = 'csc-archetypes:shimmer:v1';
+
+function loadShimmerEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    return window.localStorage.getItem(SHIMMER_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function ShimmerToggle({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!enabled)}
+      aria-pressed={enabled}
+      title={enabled ? 'Disable shimmer animation' : 'Enable shimmer animation'}
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
+        enabled
+          ? 'text-neon-purple border-neon-purple/40 bg-neon-purple/10 hover:bg-neon-purple/15'
+          : 'text-slate-400 border-white/10 hover:text-slate-200 hover:border-white/20'
+      }`}
+    >
+      <Sparkles size={14} className={enabled ? '' : 'opacity-60'} />
+      <span className="hidden sm:inline uppercase tracking-wider">
+        Shimmer {enabled ? 'on' : 'off'}
+      </span>
+    </button>
+  );
+}
+
 function Header() {
+  const [shimmerEnabled, setShimmerEnabled] = useState<boolean>(() => loadShimmerEnabled());
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (shimmerEnabled) root.classList.remove('shimmer-disabled');
+    else root.classList.add('shimmer-disabled');
+    try {
+      window.localStorage.setItem(SHIMMER_KEY, shimmerEnabled ? '1' : '0');
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, [shimmerEnabled]);
+
   return (
     <header className="glass border-b border-neon-blue/20 sticky top-0 z-40">
-      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center">
+      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center gap-4">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-xl bg-gradient-to-br from-neon-blue/20 to-neon-purple/20 border border-neon-blue/30">
             <Sparkles size={24} className="text-neon-purple" />
@@ -18,6 +69,9 @@ function Header() {
               CS2 build classifier
             </div>
           </div>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <ShimmerToggle enabled={shimmerEnabled} onChange={setShimmerEnabled} />
         </div>
       </div>
     </header>
