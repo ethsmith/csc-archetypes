@@ -63,13 +63,22 @@ function saveRevealed(set: Set<string>) {
 }
 
 // ---------------------------------------------------------------------------
-// Pagination (unrevealed tab)
+// Pagination
+//
+// Two independent page-size settings: one for the big unrevealed list, and a
+// smaller-grained one for the per-archetype sections on the revealed tab.
+// Each is persisted under its own localStorage key.
 // ---------------------------------------------------------------------------
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500, 1000] as const;
 type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
 const DEFAULT_PAGE_SIZE: PageSize = 50;
 const PAGE_SIZE_KEY = 'csc-archetypes:unrevealedPageSize:v1';
+
+const ARCHETYPE_PAGE_SIZE_OPTIONS = [15, 25, 35, 50, 100, 250] as const;
+type ArchetypePageSize = (typeof ARCHETYPE_PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_ARCHETYPE_PAGE_SIZE: ArchetypePageSize = 25;
+const ARCHETYPE_PAGE_SIZE_KEY = 'csc-archetypes:archetypePageSize:v1';
 
 function loadPageSize(): PageSize {
   if (typeof window === 'undefined') return DEFAULT_PAGE_SIZE;
@@ -92,6 +101,39 @@ function savePageSize(size: PageSize) {
     /* ignore */
   }
 }
+
+function loadArchetypePageSize(): ArchetypePageSize {
+  if (typeof window === 'undefined') return DEFAULT_ARCHETYPE_PAGE_SIZE;
+  try {
+    const raw = window.localStorage.getItem(ARCHETYPE_PAGE_SIZE_KEY);
+    if (!raw) return DEFAULT_ARCHETYPE_PAGE_SIZE;
+    const n = Number(raw);
+    if ((ARCHETYPE_PAGE_SIZE_OPTIONS as readonly number[]).includes(n)) {
+      return n as ArchetypePageSize;
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_ARCHETYPE_PAGE_SIZE;
+}
+
+function saveArchetypePageSize(size: ArchetypePageSize) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ARCHETYPE_PAGE_SIZE_KEY, String(size));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Stable no-op callback for PaginationBar instances rendered in compact mode,
+ * which never expose the page-size selector. Defined at module scope so
+ * ArchetypeSection doesn't allocate a fresh function on every render.
+ */
+const NO_OP_PAGE_SIZE_CHANGE = (_size: number) => {
+  void _size;
+};
 
 type TabKey = 'unrevealed' | 'revealed' | 'teams';
 
@@ -289,13 +331,33 @@ function ArchetypeChip({
 function ArchetypeSection({
   arch,
   players,
+  pageSize,
   onSelect,
 }: {
   arch: Archetype;
   players: PlayerInGroup[];
+  pageSize: ArchetypePageSize;
   onSelect: (entry: PlayerInGroup) => void;
 }) {
   const Icon = arch.icon;
+  const [page, setPage] = useState(0);
+  // Reset to page 0 whenever pageSize changes so the user always lands on the
+  // top of the new pagination. We use the "storing information from previous
+  // renders" pattern (https://react.dev/reference/react/useState) instead of a
+  // useEffect to avoid the cascading-render lint warning.
+  const [prevPageSize, setPrevPageSize] = useState(pageSize);
+  if (prevPageSize !== pageSize) {
+    setPrevPageSize(pageSize);
+    setPage(0);
+  }
+
+  const totalPages = Math.max(1, Math.ceil(players.length / pageSize));
+  const clampedPage = Math.max(0, Math.min(page, totalPages - 1));
+  const start = clampedPage * pageSize;
+  const end = Math.min(players.length, start + pageSize);
+  const visible = useMemo(() => players.slice(start, end), [players, start, end]);
+  const canPrev = clampedPage > 0;
+  const canNext = clampedPage < totalPages - 1;
 
   return (
     <section
@@ -348,11 +410,47 @@ function ArchetypeSection({
           No players match this archetype with current filters.
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {players.map((p) => (
-            <PlayerCard key={p.gp.steamId} entry={p} arch={arch} onSelect={onSelect} />
-          ))}
-        </div>
+        <>
+          {totalPages > 1 && (
+            <div className="mb-4">
+              <PaginationBar
+                page={clampedPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={NO_OP_PAGE_SIZE_CHANGE}
+                rangeStart={start + 1}
+                rangeEnd={end}
+                total={players.length}
+                canPrev={canPrev}
+                canNext={canNext}
+                compact
+              />
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {visible.map((p) => (
+              <PlayerCard key={p.gp.steamId} entry={p} arch={arch} onSelect={onSelect} />
+            ))}
+          </div>
+          {totalPages > 1 && (
+            <div className="mt-4">
+              <PaginationBar
+                page={clampedPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={NO_OP_PAGE_SIZE_CHANGE}
+                rangeStart={start + 1}
+                rangeEnd={end}
+                total={players.length}
+                canPrev={canPrev}
+                canNext={canNext}
+                compact
+              />
+            </div>
+          )}
+        </>
       )}
     </section>
   );
@@ -669,7 +767,7 @@ function UnrevealedSection({
         totalPages={totalPages}
         pageSize={pageSize}
         onPageChange={onPageChange}
-        onPageSizeChange={onPageSizeChange}
+        onPageSizeChange={(n) => onPageSizeChange(n as PageSize)}
         rangeStart={start + 1}
         rangeEnd={end}
         total={totalCount}
@@ -690,7 +788,7 @@ function UnrevealedSection({
             totalPages={totalPages}
             pageSize={pageSize}
             onPageChange={onPageChange}
-            onPageSizeChange={onPageSizeChange}
+            onPageSizeChange={(n) => onPageSizeChange(n as PageSize)}
             rangeStart={start + 1}
             rangeEnd={end}
             total={totalCount}
@@ -711,9 +809,14 @@ function UnrevealedSection({
 interface PaginationBarProps {
   page: number;
   totalPages: number;
-  pageSize: PageSize;
+  pageSize: number;
   onPageChange: (page: number) => void;
-  onPageSizeChange: (size: PageSize) => void;
+  onPageSizeChange: (size: number) => void;
+  /**
+   * Options for the inline page-size dropdown. Only used when !compact.
+   * Defaults to the unrevealed-tab options for backwards compatibility.
+   */
+  pageSizeOptions?: readonly number[];
   rangeStart: number;
   rangeEnd: number;
   total: number;
@@ -728,6 +831,7 @@ function PaginationBar({
   pageSize,
   onPageChange,
   onPageSizeChange,
+  pageSizeOptions = PAGE_SIZE_OPTIONS,
   rangeStart,
   rangeEnd,
   total,
@@ -738,26 +842,20 @@ function PaginationBar({
   return (
     <div className="relative flex flex-wrap items-center gap-3">
       {!compact && (
-        <div className="flex items-center gap-2">
-          <label
-            htmlFor="unrevealed-page-size"
-            className="text-[10px] uppercase tracking-wider text-slate-500"
-          >
-            Per page
-          </label>
+        <label className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">Per page</span>
           <select
-            id="unrevealed-page-size"
             value={pageSize}
-            onChange={(e) => onPageSizeChange(Number(e.target.value) as PageSize)}
+            onChange={(e) => onPageSizeChange(Number(e.target.value))}
             className="appearance-none glass rounded-lg px-3 py-1.5 pr-8 text-xs text-slate-200 border border-white/10 hover:border-neon-purple/30 focus:border-neon-purple/50 focus:outline-none cursor-pointer tabular-nums"
           >
-            {PAGE_SIZE_OPTIONS.map((n) => (
+            {pageSizeOptions.map((n) => (
               <option key={n} value={n} className="bg-dark-800 text-slate-200">
                 {n}
               </option>
             ))}
           </select>
-        </div>
+        </label>
       )}
 
       <div className="text-[11px] text-slate-400 tabular-nums">
@@ -1190,15 +1288,24 @@ export default function Archetypes({ players }: Props) {
   const [revealPhase, setRevealPhase] = useState<'reveal' | 'modal'>('modal');
   const [revealed, setRevealed] = useState<Set<string>>(() => loadRevealed());
 
-  // Tab + pagination state (for the unrevealed tab).
+  // Tab + pagination state. The unrevealed-tab page size is independent from
+  // the per-archetype-section page size on the revealed tab.
   const [activeTab, setActiveTab] = useState<TabKey>('unrevealed');
   const [pageSize, setPageSizeState] = useState<PageSize>(() => loadPageSize());
   const [page, setPage] = useState<number>(0);
+  const [archetypePageSize, setArchetypePageSizeState] = useState<ArchetypePageSize>(
+    () => loadArchetypePageSize(),
+  );
 
   const changePageSize = useCallback((size: PageSize) => {
     setPageSizeState(size);
     savePageSize(size);
     setPage(0);
+  }, []);
+
+  const changeArchetypePageSize = useCallback((size: ArchetypePageSize) => {
+    setArchetypePageSizeState(size);
+    saveArchetypePageSize(size);
   }, []);
 
   const markRevealed = useCallback((steamId: string) => {
@@ -1557,6 +1664,29 @@ export default function Archetypes({ players }: Props) {
             ))}
           </div>
 
+          {/* Per-archetype pagination control. Applies to every section
+              below; each section keeps its own page index locally. */}
+          <div className="flex items-center justify-end">
+            <label className="flex items-center gap-2">
+              <span className="text-[10px] uppercase tracking-wider text-slate-500">
+                Per archetype
+              </span>
+              <select
+                value={archetypePageSize}
+                onChange={(e) =>
+                  changeArchetypePageSize(Number(e.target.value) as ArchetypePageSize)
+                }
+                className="appearance-none glass rounded-lg px-3 py-1.5 pr-8 text-xs text-slate-200 border border-white/10 hover:border-neon-purple/30 focus:border-neon-purple/50 focus:outline-none cursor-pointer tabular-nums"
+              >
+                {ARCHETYPE_PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n} className="bg-dark-800 text-slate-200">
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           {/* Per-archetype sections */}
           <div className="space-y-5">
             {ARCHETYPES.map((arch) => (
@@ -1564,6 +1694,7 @@ export default function Archetypes({ players }: Props) {
                 key={arch.id}
                 arch={arch}
                 players={grouped.get(arch.id) ?? []}
+                pageSize={archetypePageSize}
                 onSelect={(entry) => openCard(entry, arch)}
               />
             ))}
